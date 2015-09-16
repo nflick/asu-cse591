@@ -112,7 +112,7 @@ class InstagramCrawler(Crawler):
         if resp.status_code == 429 or ('x-ratelimit-remaining' in resp.headers and int(resp.headers['x-ratelimit-remaining']) < 100):
             if self.verbose:
                 print("Pausing to throttle API calls...")
-            time.sleep(60)
+            sleep(60)
         return content
 
     def successors(self, user):
