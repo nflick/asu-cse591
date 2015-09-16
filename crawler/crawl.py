@@ -109,7 +109,7 @@ class InstagramCrawler(Crawler):
             print(resp.url[len(self.api_base):])
             print(resp.status_code)
         # Avoid exceeding the Instagram API limits and getting access turned off.
-        if resp.status_code == 429 or 'x-ratelimit-remaining' in resp.headers and int(resp.headers['x-ratelimit-remaining']) < 100:
+        if resp.status_code == 429 or ('x-ratelimit-remaining' in resp.headers and int(resp.headers['x-ratelimit-remaining']) < 100):
             if self.verbose:
                 print("Pausing to throttle API calls...")
             time.sleep(60)
@@ -279,6 +279,7 @@ def main():
     # the crawler can exit cleanly.
     signal.signal(signal.SIGINT, lambda s, f: stop_crawler(crawler))
     crawler.run()
+    session.close()
 
 if __name__ == '__main__':
     main()
