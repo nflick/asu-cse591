@@ -1,0 +1,4 @@
+crawler/env/
+*.pyc
+__pycache__/
+*.log
