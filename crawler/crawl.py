@@ -31,6 +31,7 @@ class Crawler:
             sys.stderr.write('\n')
             self.max_except -= 1
             if self.max_except <= 0:
+                print('Stopping due to exceptions...')
                 self.stop = True
 
     def run(self):
@@ -92,12 +93,13 @@ class InstagramCrawler(Crawler):
         try:
             for content, next_max_id in self.client.recent(user.id, user.next_max_id):
                 user.next_max_id = next_max_id
+                if next_max_id is None:
+                    user.fully_scraped = True
                 geotagged = [m for m in content if self.has_location(m)]
                 for g in geotagged:
                     self.store(user, g)
-                else:
+                if len(geotagged) == 0:
                     return
-            user.fully_scraped = True
         except PrivateUserException:
             user.private = True
 
@@ -119,7 +121,7 @@ class InstagramCrawler(Crawler):
             lat=float(media['location']['latitude']),
             lng=float(media['location']['longitude']),
             user=user)
-        self.session.add(image)
+        self.session.merge(image)
 
     def seed_by_location(self, lat, lng):
         '''Uses the /media/search API endpoint to initialize the search queue
