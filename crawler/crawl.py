@@ -114,14 +114,16 @@ class InstagramCrawler(Crawler):
             caption = media['caption']['text']
         else:
             caption = None
-        image = Image(id=id_,
-            date=datetime.fromtimestamp(int(media['created_time'])),
-            caption=caption,
-            tags=media['tags'],
-            lat=float(media['location']['latitude']),
-            lng=float(media['location']['longitude']),
-            user=user)
-        self.session.merge(image)
+
+        if self.session.query(Image).get(id_) is None:
+            image = Image(id=id_,
+                date=datetime.fromtimestamp(int(media['created_time'])),
+                caption=caption,
+                tags=media['tags'],
+                lat=float(media['location']['latitude']),
+                lng=float(media['location']['longitude']),
+                user=user)
+            self.session.add(image)
 
     def seed_by_location(self, lat, lng):
         '''Uses the /media/search API endpoint to initialize the search queue
