@@ -12,6 +12,8 @@ from collections import deque
 from random import sample
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
+
 from models import *
 from instagram import *
 
@@ -48,7 +50,11 @@ class Crawler:
                 self.session.add(user)
             self.attempt(lambda: self.scrape(user))
             self.attempt(lambda: self.branch(user))
-            self.session.commit()
+            try:
+                self.session.commit()
+            except IntegrityError as e:
+                session.rollback()
+                sys.stderr.write('IntegrityError: {0} {1}\n\n'.format(e.statement, e.params))
 
     def branch(self, user):
         '''Adds to the search queue by selecting from the successors
@@ -96,34 +102,51 @@ class InstagramCrawler(Crawler):
                 if next_max_id is None:
                     user.fully_scraped = True
                 geotagged = [m for m in content if self.has_location(m)]
-                for g in geotagged:
-                    self.store(user, g)
+                for media in geotagged:
+                    self.store_media(user, media)
                 if len(geotagged) == 0:
                     return
         except PrivateUserException:
             user.private = True
 
-    def store(self, user, media):
+    def store_media(self, user, media):
         '''Stores the given media, which must contain location information.
         user: The User object associated with the media.
         media: The JSON representation of the media.
         returns: Nothing.
         '''
         id_ = int(media['id'].split('_')[0])
-        if media['caption'] is not None and 'text' in media['caption']:
-            caption = media['caption']['text']
-        else:
-            caption = None
+        if self.session.query(Media).get(id_) is None:
+            if media['caption'] is not None and 'text' in media['caption']:
+                caption = media['caption']['text']
+            else:
+                caption = None
+            location = self.store_location(media['location'])
 
-        if self.session.query(Image).get(id_) is None:
-            image = Image(id=id_,
+            media_obj = Media(id=id_,
                 date=datetime.fromtimestamp(int(media['created_time'])),
                 caption=caption,
                 tags=media['tags'],
-                lat=float(media['location']['latitude']),
-                lng=float(media['location']['longitude']),
-                user=user)
-            self.session.add(image)
+                type=media['type'],
+                user=user,
+                location=location)
+            self.session.add(media_obj)
+
+    def store_location(self, location):
+        '''Stores the given location in the database.
+        location: The JSON representation of the location as returned
+            by the Instagram API.
+        return: The Location object.
+        '''
+        id_ = int(location['id'])
+        location_obj = self.session.query(Location).get(id_)
+        if location_obj is None:
+            location_obj = Location(id=id_,
+                name=location['name'],
+                latitude=float(location['latitude']),
+                longitude=float(location['longitude']))
+            self.session.add(location_obj)
+        return location_obj
 
     def seed_by_location(self, lat, lng):
         '''Uses the /media/search API endpoint to initialize the search queue
