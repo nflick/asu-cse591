@@ -25,16 +25,29 @@ class Crawler:
         self.max_except = max_except
         self.stop = False
 
+    def on_except(self):
+        self.max_except -= 1
+        if self.max_except <= 0:
+            print('Stopping due to exceptions...')
+            sys.stderr.write('Stopping due to exceptions...\n\n')
+            self.stop = True
+
     def attempt(self, func):
         try:
             func()
+        except IntegrityError as e:
+            # This happens when another crawler adds an object to the database between
+            # the time that this crawler queries to see if an object with that id exists
+            # in the database and the time that the object is added to the database.
+            # We will count down self.max_except, but we also need to rollback the session
+            # or else it will throw an exception on every subsequence call.
+            sys.stderr.write('IntegrityError: {0} {1}\n\n'.format(e.statement, e.params))
+            self.session.rollback()
+            self.on_except()
         except:
             traceback.print_exc(file=sys.stderr)
             sys.stderr.write('\n')
-            self.max_except -= 1
-            if self.max_except <= 0:
-                print('Stopping due to exceptions...')
-                self.stop = True
+            self.on_except()
 
     def run(self):
         '''Crawls the target site by performing a hybrid breadth-first/depth-first
@@ -50,11 +63,7 @@ class Crawler:
                 self.session.add(user)
             self.attempt(lambda: self.scrape(user))
             self.attempt(lambda: self.branch(user))
-            try:
-                self.session.commit()
-            except IntegrityError as e:
-                session.rollback()
-                sys.stderr.write('IntegrityError: {0} {1}\n\n'.format(e.statement, e.params))
+            self.attempt(lambda: self.session.commit())
 
     def branch(self, user):
         '''Adds to the search queue by selecting from the successors
