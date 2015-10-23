@@ -1,6 +1,6 @@
 crawler/env/
 modelgen/target
-modelgen/project
+modelgen/project/*/
 *.pyc
 __pycache__/
 *.log
