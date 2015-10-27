@@ -34,4 +34,24 @@ class KDTreeSpec extends FlatSpec with Matchers {
       })
   }
 
+  it should "perform well" in {
+    val rand = new Random(42)  
+    val points = for ( i <- 1 to 7000 ) yield {
+      Vectors.dense(rand.nextDouble(), rand.nextDouble(), rand.nextDouble)
+    }
+
+    val tree = KDTree[Int](points.map((_, 0))).getOrElse(null)
+
+    def bruteNearest(to: Vector, in: Seq[Vector]) = {
+      in.minBy(Vectors.sqdist(_, to))
+    }
+
+    (1 to 300000).
+      map(i => Vectors.dense(rand.nextDouble(), rand.nextDouble(), rand.nextDouble())).
+      foreach({ pt =>
+        //tree.nearest(pt)
+        bruteNearest(pt, points)
+      })
+  }
+
 }
