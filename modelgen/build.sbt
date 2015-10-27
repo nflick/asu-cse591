@@ -5,10 +5,15 @@ lazy val root = (project in file(".")).
     scalaVersion := "2.10.4",
     scalacOptions ++= Seq("-feature"),
     
-    libraryDependencies ++= Seq("org.apache.spark" %% "spark-core" % "1.5.1" % "provided",
+    libraryDependencies ++= Seq(
+      "org.apache.spark" %% "spark-core" % "1.5.1" % "provided",
       "org.apache.spark" %% "spark-mllib" % "1.5.1" % "provided",
-      "com.github.scopt" %% "scopt" % "3.3.0"),
+      "com.github.scopt" %% "scopt" % "3.3.0",
+      "org.scalatest" % "scalatest_2.10" % "2.0" % "test"
+    ),
 
-    resolvers += Resolver.sonatypeRepo("public")
+    resolvers ++= Seq(
+      Resolver.sonatypeRepo("public"),
+      "Sonatype Releases" at "https://oss.sonatype.org/content/repositories/releases/"
+    )
   )
-

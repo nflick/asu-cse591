@@ -6,10 +6,11 @@
 
 import scala.util.parsing.combinator.RegexParsers
 import scala.language.postfixOps
+import scala.util.Random
 
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.io.File
+import java.io._
 
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
@@ -24,6 +25,7 @@ case class Arguments(
   numPartitions: Option[Int] = None,
   sourcePath: String = null,
   partitionPath: String = null,
+  outputPath: String = null,
   latitude: Double = 0.0,
   longitude: Double = 0.0
 )
@@ -58,21 +60,21 @@ object ModelGen {
       )
 
     note("\n")
-    cmd("predict").
-      text("Predict the partition for the given location.").
-      action((_, c) => c.copy(command = 'predict)).
+    cmd("visualize").
+      text("Generate KML file to visualize the location partitions/cells.").
+      action((_, c) => c.copy(command = 'visualize)).
       children(
         arg[String]("<partitions>").
           action((x, c) => c.copy(partitionPath = x)).
           text("The partition model."),
 
-        arg[Double]("<lat>").
-          action((x, c) => c.copy(latitude = x)).
-          text("Latitude for prediction."),
+        arg[String]("<source>").
+          action((x, c) => c.copy(sourcePath = x)).
+          text("Source of samples in CSV format."),
 
-        arg[Double]("<long>").
-          action((x, c) => c.copy(longitude = x)).
-          text("Longitude for prediction.")
+        arg[String]("<output>").
+          action((x, c) => c.copy(outputPath = x)).
+          text("Location to save the KML file.")
       )
 
     checkConfig(c => if (c.command == null) failure("A command must be provided.") else success)
@@ -87,7 +89,7 @@ object ModelGen {
 
         arguments.command match {
           case 'partition => partition(sc, arguments)
-          case 'predict => predict(sc, arguments)
+          case 'visualize => visualize(sc, arguments)
           case _ =>
         }
       }
@@ -107,11 +109,34 @@ object ModelGen {
     model.save(sc, args.partitionPath)
   }
 
-  def predict(sc: SparkContext, args: Arguments) = {
+  def visualize(sc: SparkContext, args: Arguments) = {
+    val rand = new Random()
+    def randomColor() = {
+      val bytes = Array.ofDim[Byte](3)
+      rand.nextBytes(bytes)
+      f"ff${bytes(0)}%02x${bytes(1)}%02x${bytes(2)}%02x"
+    }
+
     val model = KMeansPartitioner.load(sc, args.partitionPath)
-    val partition = model.partition(
-      Media(0, 0, LocalDateTime.now(), Array[String](), 0, "", args.latitude, args.longitude))
-    println(partition)
+    val samples = loadSamples(sc, args.sourcePath)
+    val predictions = samples.zip(model.partition(samples))
+
+    val kml =
+    <kml><Document>
+      {for (i <- 0 until model.numPartitions) yield
+        <Style id={i.toString}><IconStyle>
+        <color>{randomColor()}</color>
+        <Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>
+        </IconStyle></Style>
+      } {for (m <- predictions.toLocalIterator) yield
+        <Placemark>
+        <description>{m._1.tags.toString}</description>
+        <styleUrl>{m._2.toString}</styleUrl>
+        <Point><coordinates>{s"${m._1.longitude},${m._1.latitude}"}</coordinates></Point>
+        </Placemark>
+    } </Document></kml>
+    
+    scala.xml.XML.save(args.outputPath, kml)
   }
 
   def loadSamples(sc: SparkContext, path: String) = {
