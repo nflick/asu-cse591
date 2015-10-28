@@ -49,8 +49,8 @@ class KDTreeSpec extends FlatSpec with Matchers {
     (1 to 300000).
       map(i => Vectors.dense(rand.nextDouble(), rand.nextDouble(), rand.nextDouble())).
       foreach({ pt =>
-        //tree.nearest(pt)
-        bruteNearest(pt, points)
+        tree.nearest(pt)
+        //bruteNearest(pt, points)
       })
   }
 

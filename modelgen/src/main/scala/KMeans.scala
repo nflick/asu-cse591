@@ -31,32 +31,29 @@ object KDTree {
     }
   }
 
-  case class KDNode[T](key: Vector, value: T,
+  case class KDNode[T](value: Vector, tag: T,
     left: Option[KDNode[T]], right: Option[KDNode[T]], axis: Int)
     extends Serializable {
 
     def nearest(to: Vector): Nearest[T] = {
-      val default = Nearest[T](key, value, to)
-      (0 until to.size).map(i => to(i) - key(i)).find(_ != 0.0).getOrElse(0.0) match {
-        case 0.0 => default
-        case t =>
-          lazy val bestL = left.map(_.nearest(to)).getOrElse(default)
-          lazy val bestR = right.map(_.nearest(to)).getOrElse(default)
-          val branch1 = if (t < 0) bestL else bestR
-          val best = if (branch1.sqdist < default.sqdist) branch1 else default
-          val splitDist = to(axis) - key(axis)
+      val default = Nearest[T](value, tag, to)
+      val dist = to(axis) - value(axis)
 
-          if (splitDist * splitDist < best.sqdist) {
-            val branch2 = if (t < 0) bestR else bestL
-            if (branch2.sqdist < best.sqdist) branch2 else best
-          } else best
-      }
+      lazy val bestL = left.map(_.nearest(to)).getOrElse(default)
+      lazy val bestR = right.map(_.nearest(to)).getOrElse(default)
+      val branch1 = if (dist < 0) bestL else bestR
+      val best = if (branch1.sqdist < default.sqdist) branch1 else default
+
+      if (dist * dist < best.sqdist) {
+        val branch2 = if (dist < 0) bestR else bestL
+        if (branch2.sqdist < best.sqdist) branch2 else best
+      } else best
     }
 
   }
 
-  case class Nearest[T](key: Vector, value: T, to: Vector) {
-    lazy val sqdist = Vectors.sqdist(key, to)
+  case class Nearest[T](value: Vector, tag: T, to: Vector) {
+    val sqdist = Vectors.sqdist(value, to)
   }
 
 }
@@ -115,7 +112,7 @@ class KMeans(data: RDD[Vector], numClusters: Int,
 
         points.foreach { point =>
           val (center, index) = tree.nearest(point) match {
-            case KDTree.Nearest(key, value, to) => (key, value)
+            case KDTree.Nearest(value, tag, to) => (value, tag)
           }
 
           costAccum += Vectors.sqdist(point, center)
@@ -168,7 +165,7 @@ class KMeans(data: RDD[Vector], numClusters: Int,
       val preCosts = costs
       costs = data.zip(preCosts).map { case (point, cost) =>
         val nearest = bcTree.value.nearest(point)
-        math.min(Vectors.sqdist(nearest.key, point), cost)
+        math.min(Vectors.sqdist(nearest.value, point), cost)
       }.persist(StorageLevel.MEMORY_AND_DISK)
 
       val sumCosts = costs.aggregate(0.0)((u, v) => u + v, (u, v) => u + v)
@@ -207,7 +204,7 @@ class KMeans(data: RDD[Vector], numClusters: Int,
 
     val finalCenters = data.map { p =>
       val nearest = bcTree.value.nearest(p)
-      (nearest.value, 1)
+      (nearest.tag, 1)
     }.reduceByKey(_ + _).
       sortBy(_._2, ascending = false).
       map(t => bcCenters.value(t._1)).

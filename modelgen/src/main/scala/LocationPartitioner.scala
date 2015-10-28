@@ -57,7 +57,7 @@ class KMeansPartitioner(model: KMeansModel)
 object KMeansPartitioner {
 
   def build(media: RDD[Media], numClusters: Int, 
-    maxIterations: Int = 25, seed: Long = 42) = {
+    maxIterations: Int = 40, seed: Long = 42) = {
     val ecef = media.map(m => LLA(m.latitude, m.longitude, 0.0).toECEF)
     val data = ecef.map(e => Vectors.dense(e.x, e.y, e.z)).cache()
     val kmeans = new KMeans(data, numClusters, maxIterations = maxIterations, seed = seed)
