@@ -25,7 +25,9 @@ case class Arguments(
   numPartitions: Option[Int] = None,
   sourcePath: String = null,
   partitionPath: String = null,
+  modelPath: String = null,
   outputPath: String = null,
+  tags: String = null,
   latitude: Double = 0.0,
   longitude: Double = 0.0
 )
@@ -77,6 +79,60 @@ object ModelGen {
           text("Location to save the KML file.")
       )
 
+    note("\n")
+    cmd("train").
+      text("Train the Naive Bayes classification model.").
+      action((_, c) => c.copy(command = 'train)).
+      children(
+        arg[String]("<partitions>").
+          action((x, c) => c.copy(partitionPath = x)).
+          text("The partition model."),
+
+        arg[String]("<source>").
+          action((x, c) => c.copy(sourcePath = x)).
+          text("Source of samples in CSV format."),
+
+        arg[String]("<output>").
+          action((x, c) => c.copy(modelPath = x)).
+          text("Location to save the generated model.")
+      )
+
+    note("\n")
+    cmd("label").
+      text("Write a CSV file with classes assigned to each sample.").
+      action((_, c) => c.copy(command = 'label)).
+      children(
+        arg[String]("<partitions>").
+          action((x, c) => c.copy(partitionPath = x)).
+          text("The partition model."),
+
+        arg[String]("<source>").
+          action((x, c) => c.copy(sourcePath = x)).
+          text("Source of samples in CSV format."),
+
+        arg[String]("<output>").
+          action((x, c) => c.copy(outputPath = x)).
+          text("Location to save the generated model.")
+      )
+
+    note("\n")
+    cmd("predict").
+      text("Predict the location of a set of tags.").
+      action((_, c) => c.copy(command = 'predict)).
+      children(
+        arg[String]("<partitions>").
+          action((x, c) => c.copy(partitionPath = x)).
+          text("The partition model."),
+
+        arg[String]("<model>").
+          action((x, c) => c.copy(modelPath = x)).
+          text("The classification model."),
+
+        arg[String]("<tags>").
+          action((x, c) => c.copy(tags = x)).
+          text("The set of tags to predict as {tag1,tag2...}.")
+      )
+
     checkConfig(c => if (c.command == null) failure("A command must be provided.") else success)
   }
 
@@ -90,6 +146,9 @@ object ModelGen {
         arguments.command match {
           case 'partition => partition(sc, arguments)
           case 'visualize => visualize(sc, arguments)
+          case 'train => train(sc, arguments)
+          case 'label => label(sc, arguments)
+          case 'predict => predict(sc, arguments)
           case _ =>
         }
       }
@@ -139,16 +198,52 @@ object ModelGen {
     scala.xml.XML.save(args.outputPath, kml)
   }
 
+  def train(sc: SparkContext, args: Arguments) = {
+    val samples = loadSamples(sc, args.sourcePath)
+    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
+    val model = TagClassifier.train(samples, partitioner)
+    model.save(sc, args.modelPath)
+  }
+
+  def label(sc: SparkContext, args: Arguments) = {
+    val samples = loadSamples(sc, args.sourcePath)
+    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
+    val labeled = samples.zip(partitioner.partition(samples))
+
+    val writer = new PrintWriter(args.outputPath)
+    try {
+      val format = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+      for (m <- labeled.toLocalIterator) {
+        writer.println(s"""${m._2},${m._1.id},${m._1.userId},${m._1.date.format(format)},"{${m._1.tags.mkString(",")}}",${m._1.locationId},${m._1.locationName},${m._1.latitude},${m._1.longitude}""")
+      }
+    } finally {
+      writer.close()
+    }
+  }
+
+  def predict(sc: SparkContext, args: Arguments) = {
+    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
+    val classifier = TagClassifier.load(sc, args.modelPath)
+    val tags = TagList.parse(args.tags)
+    val clas = classifier.predict(tags)
+    val location = partitioner.partitionCenter(clas)
+    println(s"PREDICTION: ${location.toString}")
+  }
+
   def loadSamples(sc: SparkContext, path: String) = {
     sc.textFile(path).
       repartition(20).
-      map(s => CSVLine.parse(s.trim)).
-      filter(_.length == 8).
-      map(l => Media(l(0).toLong, l(1).toLong, 
-        LocalDateTime.parse(l(2), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
-        TagList.parse(l(3)),
-        l(4).toLong, l(5), l(6).toDouble, l(7).toDouble)).
-      filter(_.tags.length > 0)
+      mapPartitions({ rows =>
+        val format = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        for {
+          row <- rows.map(r => CSVLine.parse(r.trim))
+          if row.length == 8
+        } yield {
+          Media(row(0).toLong, row(1).toLong, LocalDateTime.parse(row(2), format), TagList.parse(row(3)),
+            row(4).toLong, row(5), row(6).toDouble, row(7).toDouble)
+        }
+      }).
+      cache()
   }
 }
 
@@ -179,8 +274,7 @@ object TagList extends RegexParsers {
   def record: Parser[List[String]] = (LBRACE~>(tag~((COMMA~>tag)*))<~RBRACE) ^^ { case f~fs => f::fs }
 
   def parse(s: String) = parseAll(record, s) match {
-    case Success(res, _) => res.toArray
-    case _ => Array[String]()
+    case Success(res, _) => res
+    case _ => List[String]()
   }
 }
-

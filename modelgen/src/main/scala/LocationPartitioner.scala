@@ -23,22 +23,24 @@ trait LocationPartitioner {
 class KMeansPartitioner(model: KMeansModel)
   extends LocationPartitioner {
 
+  private val kdtree = KDTree(model.clusterCenters.zipWithIndex) match {
+    case Some(tree) => tree
+    case None => throw new IllegalArgumentException("Model must have at least one center.")
+  }
+
   def partition(media: Media): Int = {
     val ecef = LLA(media.latitude, media.longitude, 0.0).toECEF
     val euclidean = Vectors.dense(ecef.x, ecef.y, ecef.z)
-    model.predict(euclidean)
+    kdtree.nearest(euclidean).tag
   }
 
   def partition(media: RDD[Media]): RDD[Int] = {
-    def vec(m: Media) = {
+    val bcTree = media.context.broadcast(kdtree)
+    media map { m =>
       val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF
-      Vectors.dense(ecef.x, ecef.y, ecef.z)
+      val vec = Vectors.dense(ecef.x, ecef.y, ecef.z)
+      bcTree.value.nearest(vec).tag
     }
-
-    model.predict(media.map(m => {
-      val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF
-      Vectors.dense(ecef.x, ecef.y, ecef.z)
-    }))
   }
 
   def numPartitions: Int = model.clusterCenters.length

@@ -9,6 +9,7 @@ lazy val root = (project in file(".")).
       "org.apache.spark" %% "spark-core" % "1.5.1" % "provided",
       "org.apache.spark" %% "spark-mllib" % "1.5.1" % "provided",
       "com.github.scopt" %% "scopt" % "3.3.0",
+      "org.scalanlp" %% "breeze" % "0.10",
       "org.scalatest" % "scalatest_2.10" % "2.0" % "test"
     ),
 

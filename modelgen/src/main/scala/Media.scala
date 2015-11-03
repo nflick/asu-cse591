@@ -10,7 +10,7 @@ case class Media(
   id: Long,
   userId: Long,
   date: LocalDateTime,
-  tags: Array[String],
+  tags: List[String],
   locationId: Long,
   locationName: String,
   latitude: Double,
