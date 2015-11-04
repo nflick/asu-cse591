@@ -30,24 +30,26 @@ class NaiveBayes(lambda: Double) {
 
     val labels = new Array[Int](numLabels)
     val pi = new Array[Double](numLabels)
+    val thetaLogDenom = new Array[Double](numLabels)
     
     val piLogDenom = math.log(numDocuments + numLabels * lambda)
-
     val theta = Array.tabulate[SparseVector[Double]](numLabels)({ i => 
       aggregated(i) match { case (label, (n, sumTermFreqs)) =>
         labels(i) = label
         pi(i) = math.log(n + lambda) - piLogDenom
-        val thetaLogDenom = math.log(sum(sumTermFreqs) + numFeatures * lambda)
+        thetaLogDenom(i) = math.log(sum(sumTermFreqs) + numFeatures * lambda)
 
         for (k <- sumTermFreqs.activeKeysIterator) {
-          sumTermFreqs(k) = math.log(sumTermFreqs(k) + lambda) - thetaLogDenom
+          // Subtracing thetaLogDenom will take place later to maximize zero entries and optimize
+          // memory usage of the sparse vectors.
+          sumTermFreqs(k) = math.log(sumTermFreqs(k) + lambda)
         }
 
         sumTermFreqs
       }
     })
 
-    new NaiveBayesModel(labels, pi, theta)
+    new NaiveBayesModel(labels, pi, theta, thetaLogDenom)
   }
 
 }
@@ -69,8 +71,9 @@ object NaiveBayes {
 
 }
 
-class NaiveBayesModel(labels: Array[Int], pi: Array[Double],
-  theta: Array[SparseVector[Double]]) extends Serializable {
+class NaiveBayesModel(val labels: Array[Int], val pi: Array[Double],
+    val theta: Array[SparseVector[Double]], val thetaLogDenom: Array[Double])
+    extends Serializable {
 
   def predict(testData: SparseVector[Double]): Int = {
     val logProb = multinomial(testData)
@@ -85,12 +88,23 @@ class NaiveBayesModel(labels: Array[Int], pi: Array[Double],
     }
   }
 
-  private def multinomial(features: SparseVector[Double]): Array[Double] = {
-    val logProb = Array.ofDim[Double](theta.length)
-    for (i <- 0 until theta.length) {
-      logProb(i) = theta(i) dot features + pi(i)
+  def multinomial(features: SparseVector[Double]): Array[Double] = {
+    Array.tabulate[Double](theta.length)(i =>
+      product(features, theta(i), thetaLogDenom(i)) + pi(i))
+  }
+
+  private def product(features: SparseVector[Double], probs: SparseVector[Double],
+      denom: Double) = {
+
+    require(features.size == probs.size, "Vectors are different sizes")
+    var product = 0.0
+    var offset = 0
+    while (offset < features.activeSize) {
+      product += features.valueAt(offset) * (probs(features.indexAt(offset)) - denom)
+      offset += 1
     }
-    logProb
+
+    product
   }
 
   private def posteriorProbabilities(logProb: Array[Double]) = {

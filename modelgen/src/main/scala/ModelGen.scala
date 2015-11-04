@@ -116,6 +116,16 @@ object ModelGen {
       )
 
     note("\n")
+    cmd("dump").
+      text("Write a CSV file with the locations corresponding to each class.").
+      action((_, c) => c.copy(command = 'dump)).
+      children(
+        arg[String]("<partitions>").
+          action((x, c) => c.copy(partitionPath = x)).
+          text("The partition model.")
+      )
+
+    note("\n")
     cmd("predict").
       text("Predict the location of a set of tags.").
       action((_, c) => c.copy(command = 'predict)).
@@ -148,6 +158,7 @@ object ModelGen {
           case 'visualize => visualize(sc, arguments)
           case 'train => train(sc, arguments)
           case 'label => label(sc, arguments)
+          case 'dump => dump(sc, arguments)
           case 'predict => predict(sc, arguments)
           case _ =>
         }
@@ -218,6 +229,14 @@ object ModelGen {
       }
     } finally {
       writer.close()
+    }
+  }
+
+  def dump(sc: SparkContext, args: Arguments) = {
+    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
+    for (i <- 0 until partitioner.numPartitions) {
+      val coord = partitioner.partitionCenter(i)
+      println(s"${i},${coord.lat},${coord.lon}")
     }
   }
 

@@ -12,7 +12,7 @@ import breeze.linalg._
 
 import java.io._
 
-class TagClassifier(model: NaiveBayesModel, tfidfModel: TFIDFModel) {
+class TagClassifier(val model: NaiveBayesModel, val tfidfModel: TFIDFModel) {
 
   def predict(tags: List[String]) = {
     val features = tfidfModel.transform(tags)
@@ -21,7 +21,7 @@ class TagClassifier(model: NaiveBayesModel, tfidfModel: TFIDFModel) {
 
   def save(sc: SparkContext, path: String) = {
     model.save(path)
-    tfidfModel.save(path + ".tfidf")
+    tfidfModel.save(path + ".idf")
   }
 
 }
@@ -101,7 +101,7 @@ object TagClassifier {
 
   def load(sc: SparkContext, path: String) = {
     val model = NaiveBayes.load(path)
-    val tfidfModel = TFIDF.load(path + ".tfidf")
+    val tfidfModel = TFIDF.load(path + ".idf")
     new TagClassifier(model, tfidfModel)
   }
 
