@@ -4,11 +4,14 @@
  * Author: Nathan Flick
  */
 
+package com.github.nflick.modelgen
+
 case class LLA(lat: Double, lon: Double, alt: Double) {
   // Latitude and longitude in degrees, altitude in meters.
   
-  def toECEF = {
+  def toECEF : ECEF = {
     // a is radius, e is eccentricity
+    // See https://gist.github.com/klucar/1536194
     val a = 6378137
     val e = 8.1819190842622e-2
     val esq = Math.pow(e, 2)
@@ -28,8 +31,9 @@ case class LLA(lat: Double, lon: Double, alt: Double) {
 case class ECEF(x: Double, y: Double, z: Double) {
   // x, y, and z in meters.
 
-  def toLLA = {
+  def toLLA : LLA = {
     // a is radius, e is eccentricity
+    // See https://gist.github.com/klucar/1536194
     val a = 6378137
     val e = 8.1819190842622e-2
     val asq = Math.pow(a, 2)

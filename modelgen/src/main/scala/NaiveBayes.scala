@@ -4,15 +4,22 @@
  * Author: Nathan Flick
  */
 
+package com.github.nflick.modelgen
+
+import java.io._
+
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd._
 import breeze.linalg._
 
-import java.io._
-
 class NaiveBayes(lambda: Double) {
 
   def train(data: RDD[(Int, SparseVector[Double])]) = {
+    // Adapted from https://github.com/apache/spark/blob/master/mllib/src/main/scala/org/apache/spark/mllib/classification/NaiveBayes.scala.
+    // Optimized for large numbers of classes and features through the use of sparse vectors
+    // to store the conditional probabilities of features for each class and a reordering
+    // of the mathematical operations to increase storage efficiency by maximizing the number of
+    // zero entries.
 
     val aggregated = data.combineByKey[(Long, SparseVector[Double])](
       createCombiner = (v: SparseVector[Double]) => (1L, v),
@@ -54,41 +61,24 @@ class NaiveBayes(lambda: Double) {
 
 }
 
-object NaiveBayes {
-
-  def load(path: String) = {
-    val objStream = new ObjectInputStream(new FileInputStream(path))
-    try {
-      val model = objStream.readObject() match {
-        case m: NaiveBayesModel => m
-        case other => throw new ClassCastException(s"Expected NaiveBayesModel, got ${other.getClass}.")
-      }
-      model
-    } finally {
-      objStream.close()
-    }
-  }
-
-}
-
 class NaiveBayesModel(val labels: Array[Int], val pi: Array[Double],
     val theta: Array[SparseVector[Double]], val thetaLogDenom: Array[Double])
     extends Serializable {
 
-  def predict(testData: SparseVector[Double]): Int = {
-    val logProb = multinomial(testData)
+  def predict(features: SparseVector[Double]): Int = {
+    val logProb = multinomial(features)
     val index = logProb.indexOf(logProb.max)
     labels(index)
   }
 
-  def predict(testData: RDD[SparseVector[Double]]): RDD[Int] = {
-    val bcModel = testData.context.broadcast(this)
-    testData map { v =>
+  def predict(samples: RDD[SparseVector[Double]]): RDD[Int] = {
+    val bcModel = samples.context.broadcast(this)
+    samples map { v =>
       bcModel.value.predict(v)
     }
   }
 
-  def multinomial(features: SparseVector[Double]): Array[Double] = {
+  private def multinomial(features: SparseVector[Double]): Array[Double] = {
     Array.tabulate[Double](theta.length)(i =>
       product(features, theta(i), thetaLogDenom(i)) + pi(i))
   }
@@ -122,4 +112,21 @@ class NaiveBayesModel(val labels: Array[Int], val pi: Array[Double],
       objStream.close()
     }
   }
+}
+
+object NaiveBayesModel {
+
+  def load(path: String) = {
+    val objStream = new ObjectInputStream(new FileInputStream(path))
+    try {
+      val model = objStream.readObject() match {
+        case m: NaiveBayesModel => m
+        case other => throw new ClassCastException(s"Expected NaiveBayesModel, got ${other.getClass}.")
+      }
+      model
+    } finally {
+      objStream.close()
+    }
+  }
+
 }

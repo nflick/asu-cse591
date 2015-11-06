@@ -1,8 +1,10 @@
 /**
  * ModelGen.scala
- * Main file for Spark geolocation clustering job.
+ * Main file for project.
  * Author: Nathan Flick
  */
+
+package com.github.nflick.modelgen
 
 import scala.util.parsing.combinator.RegexParsers
 import scala.language.postfixOps
@@ -16,20 +18,17 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
 import org.apache.spark.rdd._
-import org.apache.spark.mllib.clustering._
-import org.apache.spark.mllib.linalg.{Vector, Vectors}
 
 case class Arguments(
   appName: String = "Geolocation Model Builder",
   command: Symbol = null,
-  numPartitions: Option[Int] = None,
+  numClasses: Option[Int] = None,
+  loadExisting: Boolean = true,
+  seed: Long = 42,
   sourcePath: String = null,
-  partitionPath: String = null,
   modelPath: String = null,
   outputPath: String = null,
-  tags: String = null,
-  latitude: Double = 0.0,
-  longitude: Double = 0.0
+  tags: String = null
 )
 
 object ModelGen {
@@ -43,36 +42,13 @@ object ModelGen {
       text("Specify the Spark App Name.")
 
     note("\n")
-    cmd("partition").
-      text("Generate the location partitions/cells.").
-      action((_, c) => c.copy(command = 'partition)).
-      children (
-        opt[Int]('n', "num-partitions").
-          valueName("<num>").
-          action((x, c) => c.copy(numPartitions = Some(x))).
-          text("Number of partitions (default 1 per 1000 samples)."),
-
-        arg[String]("<source>").
-          action((x, c) => c.copy(sourcePath = x)).
-          text("Source of samples in CSV format."),
-
-        arg[String]("<output>").
-          action((x, c) => c.copy(partitionPath = x)).
-          text("Location to save generated partitions.")
-      )
-
-    note("\n")
     cmd("visualize").
-      text("Generate KML file to visualize the location partitions/cells.").
+      text("Generate KML file to visualize the location classes.").
       action((_, c) => c.copy(command = 'visualize)).
       children(
-        arg[String]("<partitions>").
-          action((x, c) => c.copy(partitionPath = x)).
+        arg[String]("<model>").
+          action((x, c) => c.copy(modelPath = x)).
           text("The partition model."),
-
-        arg[String]("<source>").
-          action((x, c) => c.copy(sourcePath = x)).
-          text("Source of samples in CSV format."),
 
         arg[String]("<output>").
           action((x, c) => c.copy(outputPath = x)).
@@ -81,12 +57,22 @@ object ModelGen {
 
     note("\n")
     cmd("train").
-      text("Train the Naive Bayes classification model.").
+      text("Train the prediction model.").
       action((_, c) => c.copy(command = 'train)).
       children(
-        arg[String]("<partitions>").
-          action((x, c) => c.copy(partitionPath = x)).
-          text("The partition model."),
+        opt[Int]('n', "num-classes").
+          valueName("<num>").
+          action((x, c) => c.copy(numClasses = Some(x))).
+          text("Number of classes (default 1 per 1000 samples)."),
+
+        opt[Unit]('i', "ignore-existing").
+          action((_, c) => c.copy(loadExisting = false)).
+          text("Do not used already generated components of model."),
+
+        opt[Int]('s', "seed").
+          valueName("<value>").
+          action((x, c) => c.copy(seed = x)).
+          text("Seed for random number generator."),
 
         arg[String]("<source>").
           action((x, c) => c.copy(sourcePath = x)).
@@ -95,34 +81,6 @@ object ModelGen {
         arg[String]("<output>").
           action((x, c) => c.copy(modelPath = x)).
           text("Location to save the generated model.")
-      )
-
-    note("\n")
-    cmd("label").
-      text("Write a CSV file with classes assigned to each sample.").
-      action((_, c) => c.copy(command = 'label)).
-      children(
-        arg[String]("<partitions>").
-          action((x, c) => c.copy(partitionPath = x)).
-          text("The partition model."),
-
-        arg[String]("<source>").
-          action((x, c) => c.copy(sourcePath = x)).
-          text("Source of samples in CSV format."),
-
-        arg[String]("<output>").
-          action((x, c) => c.copy(outputPath = x)).
-          text("Location to save the generated model.")
-      )
-
-    note("\n")
-    cmd("dump").
-      text("Write a CSV file with the locations corresponding to each class.").
-      action((_, c) => c.copy(command = 'dump)).
-      children(
-        arg[String]("<partitions>").
-          action((x, c) => c.copy(partitionPath = x)).
-          text("The partition model.")
       )
 
     note("\n")
@@ -130,13 +88,9 @@ object ModelGen {
       text("Predict the location of a set of tags.").
       action((_, c) => c.copy(command = 'predict)).
       children(
-        arg[String]("<partitions>").
-          action((x, c) => c.copy(partitionPath = x)).
-          text("The partition model."),
-
         arg[String]("<model>").
           action((x, c) => c.copy(modelPath = x)).
-          text("The classification model."),
+          text("The tag prediction model."),
 
         arg[String]("<tags>").
           action((x, c) => c.copy(tags = x)).
@@ -154,11 +108,8 @@ object ModelGen {
         val sc = new SparkContext(conf)
 
         arguments.command match {
-          case 'partition => partition(sc, arguments)
           case 'visualize => visualize(sc, arguments)
           case 'train => train(sc, arguments)
-          case 'label => label(sc, arguments)
-          case 'dump => dump(sc, arguments)
           case 'predict => predict(sc, arguments)
           case _ =>
         }
@@ -166,17 +117,6 @@ object ModelGen {
 
       case None =>
     }
-  }
-
-  def partition(sc: SparkContext, args: Arguments) = {
-    val samples = loadSamples(sc, args.sourcePath)
-    val partitions = args.numPartitions match {
-      case Some(p) => p
-      case None => samples.count() / 1000
-    }
-
-    val model = KMeansPartitioner.build(samples, partitions.toInt)
-    model.save(sc, args.partitionPath)
   }
 
   def visualize(sc: SparkContext, args: Arguments) = {
@@ -187,69 +127,44 @@ object ModelGen {
       f"ff${bytes(0)}%02x${bytes(1)}%02x${bytes(2)}%02x"
     }
 
-    val model = KMeansPartitioner.load(sc, args.partitionPath)
-    val samples = loadSamples(sc, args.sourcePath)
-    val predictions = samples.zip(model.partition(samples))
+    val model = KMeansModel.load(args.modelPath + ".kmeans")
 
     val kml =
     <kml><Document>
-      {for (i <- 0 until model.numPartitions) yield
+      { for (i <- 0 until model.numCenters) yield
         <Style id={i.toString}><IconStyle>
         <color>{randomColor()}</color>
         <Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>
         </IconStyle></Style>
-      } {for (m <- predictions.toLocalIterator) yield
+      } { for (i <- 0 until model.numCenters) yield
         <Placemark>
-        <description>{m._1.tags.toString}</description>
-        <styleUrl>{m._2.toString}</styleUrl>
-        <Point><coordinates>{s"${m._1.longitude},${m._1.latitude}"}</coordinates></Point>
+        <styleUrl>{i.toString}</styleUrl>
+        <Point><coordinates>{s"${model.center(i).lat},${model.center(i).lon}"}</coordinates></Point>
         </Placemark>
     } </Document></kml>
     
     scala.xml.XML.save(args.outputPath, kml)
   }
 
-  def train(sc: SparkContext, args: Arguments) = {
-    val samples = loadSamples(sc, args.sourcePath)
-    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
-    val model = TagClassifier.train(samples, partitioner)
-    model.save(sc, args.modelPath)
-  }
-
-  def label(sc: SparkContext, args: Arguments) = {
-    val samples = loadSamples(sc, args.sourcePath)
-    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
-    val labeled = samples.zip(partitioner.partition(samples))
-
-    val writer = new PrintWriter(args.outputPath)
-    try {
-      val format = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-      for (m <- labeled.toLocalIterator) {
-        writer.println(s"""${m._2},${m._1.id},${m._1.userId},${m._1.date.format(format)},"{${m._1.tags.mkString(",")}}",${m._1.locationId},${m._1.locationName},${m._1.latitude},${m._1.longitude}""")
-      }
-    } finally {
-      writer.close()
+  def train(sc: SparkContext, args: Arguments): Unit = {
+    val samples = loadSamples(sc, args.sourcePath).cache()
+    val numClasses = args.numClasses match {
+      case Some(n) => n
+      case None => samples.count / 1000
     }
-  }
 
-  def dump(sc: SparkContext, args: Arguments) = {
-    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
-    for (i <- 0 until partitioner.numPartitions) {
-      val coord = partitioner.partitionCenter(i)
-      println(s"${i},${coord.lat},${coord.lon}")
-    }
+    val engine = PredictionModel.train(samples, numClasses.toInt, args.modelPath,
+      args.loadExisting, args.seed)
   }
 
   def predict(sc: SparkContext, args: Arguments) = {
-    val partitioner = KMeansPartitioner.load(sc, args.partitionPath)
-    val classifier = TagClassifier.load(sc, args.modelPath)
     val tags = TagList.parse(args.tags)
-    val clas = classifier.predict(tags)
-    val location = partitioner.partitionCenter(clas)
+    val engine = PredictionModel.load(args.modelPath)
+    val location = engine.predict(tags)
     println(s"PREDICTION: ${location.toString}")
   }
 
-  def loadSamples(sc: SparkContext, path: String) = {
+  def loadSamples(sc: SparkContext, path: String): RDD[Media] = {
     sc.textFile(path).
       repartition(20).
       mapPartitions({ rows =>
@@ -261,8 +176,7 @@ object ModelGen {
           Media(row(0).toLong, row(1).toLong, LocalDateTime.parse(row(2), format), TagList.parse(row(3)),
             row(4).toLong, row(5), row(6).toDouble, row(7).toDouble)
         }
-      }).
-      cache()
+      })
   }
 }
 

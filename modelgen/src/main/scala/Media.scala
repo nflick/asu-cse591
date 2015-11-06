@@ -4,6 +4,8 @@
  * Author: Nathan Flick
  */
 
+package com.github.nflick.modelgen
+
 import java.time.LocalDateTime
 
 case class Media(
