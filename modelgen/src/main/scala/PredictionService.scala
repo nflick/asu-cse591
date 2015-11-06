@@ -1,0 +1,52 @@
+/**
+ * PredictionModel.scala
+ * Serve predictions over an HTTP endpoint.
+ * Adapted from https://github.com/spray/spray-template/blob/on_spray-can_1.3/src/main/scala/com/example/MyService.scala.
+ * Author: Nathan Flick
+ */
+
+package com.github.nflick.modelgen
+
+import akka.actor.Actor
+import spray.routing._
+import spray.http._
+import MediaTypes._
+import spray.json._
+import spray.httpx.SprayJsonSupport
+import scala.language.postfixOps
+
+class PredictionServiceActor(val model: PredictionModel) extends Actor with PredictionService {
+  def actorRefFactory = context
+  def receive = runRoute(predict)
+}
+
+object PredictionJsonProtocol extends DefaultJsonProtocol {
+  implicit val predictionFormat = jsonFormat2(Prediction)
+}
+
+trait PredictionService extends HttpService {
+
+	val model: PredictionModel
+
+  val predict = {
+    import SprayJsonSupport._
+    import PredictionJsonProtocol._
+    path("predict" / Segment ~ PathEnd) { tags =>
+      get  {
+        parameters("count".as[Int] ?) { count =>
+          val terms = tags.split('+')
+          val result = count match {
+            case Some(c) => model.predictMultiple(terms, c)
+            case None => model.predictHeuristic(terms)
+          }
+          complete(JsObject(
+            "status" -> JsNumber(200),
+            "error" -> JsString(""),
+            "result" -> result.toJson)
+          )
+        }
+      }
+    }
+  }
+
+}

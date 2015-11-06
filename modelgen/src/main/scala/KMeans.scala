@@ -52,6 +52,7 @@ object KDTree {
     }
   }
 
+  @SerialVersionUID(1L)
   case class KDNode[T](value: Vector[Double], tag: T,
       left: Option[KDNode[T]], right: Option[KDNode[T]], axis: Int) extends Serializable {
 
@@ -72,6 +73,7 @@ object KDTree {
 
   }
 
+  @SerialVersionUID(1L)
   case class Nearest[T](value: Vector[Double], tag: T, to: Vector[Double]) extends VectorDist {
     val sqdist = squareDist(value, to)
   }
@@ -79,30 +81,26 @@ object KDTree {
 }
 
 class KMeans(maxIterations: Int = 50, initSteps: Int = 5,
-  seed: Long = 42, epsilon: Double = 1e-5) extends VectorDist {
+  seed: Long = 42, epsilon: Double = 1e-4) extends VectorDist {
 
-  def train(data: RDD[Vector[Double]], numClusters: Int): KMeansModel = {
+  def train(points: RDD[Vector[Double]], numClusters: Int): KMeansModel = {
     // Adapted from https://github.com/apache/spark/blob/master/mllib/src/main/scala/org/apache/spark/mllib/clustering/KMeans.scala
     // Optimized for spatial data through the use of KD-Trees for faster lookups
     // of the nearest center.
 
-    data.persist()
+    points.persist(StorageLevel.MEMORY_ONLY)
     val rand = new Random(seed)
-    var centers = initParallel(data, numClusters)
+    var centers = initParallel(points, numClusters)
     var iteration = 0
     var changed = true
 
     while (iteration < maxIterations && changed) {
-      val kdtree = KDTree(centers.zipWithIndex) match {
-        case Some(t) => t
-        case None => throw new IllegalArgumentException("Cannot build KDTree with zero centers.")
-      }
+      val kdtree = KDTree(centers.zipWithIndex).get
+      val bcTree = points.context.broadcast(kdtree)
+      val bcCenters = points.context.broadcast(centers)
+      val costAccum = points.context.accumulator(0.0)
 
-      val bcTree = data.context.broadcast(kdtree)
-      val bcCenters = data.context.broadcast(centers)
-      val costAccum = data.context.accumulator(0.0)
-
-      val totalContribs = data.mapPartitions { points =>
+      val totalContribs = points.mapPartitions { points =>
         val centers = bcCenters.value
         val tree = bcTree.value
         val dims = centers(0).size
@@ -112,11 +110,11 @@ class KMeans(maxIterations: Int = 50, initSteps: Int = 5,
         points.foreach { point =>
           val nearest = tree.nearest(point)
           costAccum += nearest.sqdist
-          sums(nearest.tag) += nearest.value
+          sums(nearest.tag) :+= nearest.value
           counts(nearest.tag) += 1
         }
 
-        val contribs = for ( k <- 0 until centers.length ) yield {
+        val contribs = for (k <- 0 until centers.length) yield {
           (k, (sums(k), counts(k)))
         }
         contribs.iterator
@@ -138,41 +136,38 @@ class KMeans(maxIterations: Int = 50, initSteps: Int = 5,
       iteration += 1
     }
 
-    data.unpersist(false)
+    points.unpersist(false)
     new KMeansModel(centers)
   }
 
-  private def initParallel(data: RDD[Vector[Double]], numClusters: Int):
+  private def initParallel(points: RDD[Vector[Double]], numClusters: Int):
       Array[Vector[Double]] = {
     // Adapted from https://github.com/apache/spark/blob/master/mllib/src/main/scala/org/apache/spark/mllib/clustering/KMeans.scala.
 
     val centers = ArrayBuffer.empty[Vector[Double]]
-    var costs = data.map(_ => Double.PositiveInfinity)
+    var costs = points.map(_ => Double.PositiveInfinity)
 
     // Initialize the first center to a random point.
     val rand = new Random(seed)
-    val sample = data.takeSample(true, 1, rand.nextLong()).toSeq.head.toDenseVector
+    val sample = points.takeSample(true, 1, rand.nextLong()).toSeq.head.toDenseVector
     val newCenters = ArrayBuffer[Vector[Double]](sample)
 
     var step = 0
     while (step < initSteps) {
-      val kdtree = KDTree((0 until newCenters.size).map(i => (newCenters(i), i))) match {
-        case Some(t) => t
-        case None => throw new IllegalStateException("Cannot build KDTree with zero centers.")
-      }
-
-      val bcTree = data.context.broadcast(kdtree)
+      val kdtree = KDTree(newCenters.zipWithIndex).get
+      val bcTree = points.context.broadcast(kdtree)
       val preCosts = costs
-      costs = data.zip(preCosts).map { case (point, cost) =>
+
+      costs = points.zip(preCosts).map { case (point, cost) =>
         val nearest = bcTree.value.nearest(point)
-        math.min(nearest.squareDist(nearest.value, point), cost)
+        math.min(nearest.sqdist, cost)
       }.persist(StorageLevel.MEMORY_AND_DISK)
 
       val sumCosts = costs.aggregate(0.0)((u, v) => u + v, (u, v) => u + v)
       preCosts.unpersist(blocking = false)
 
       val seed = rand.nextInt()
-      val chosen = data.zip(costs).mapPartitionsWithIndex { (index, pointsWithCosts) =>
+      val chosen = points.zip(costs).mapPartitionsWithIndex { (index, pointsWithCosts) =>
         val r = new Random(seed ^ (step << 16) ^ index)
         pointsWithCosts.flatMap { case (p, c) =>
           if (r.nextDouble() < 2.0 * c * numClusters / sumCosts) Some(p) else None
@@ -191,36 +186,115 @@ class KMeans(maxIterations: Int = 50, initSteps: Int = 5,
 
     centers ++= newCenters
     newCenters.clear()
-    costs.unpersist(blocking = false)
+    costs.unpersist(false)
 
-    val kdtree = KDTree(centers.zipWithIndex) match {
-      case Some(t) => t
-      case None => throw new IllegalArgumentException("Cannot build KDTree with zero centers.")
-    }
+    val kdtree = KDTree(centers.zipWithIndex).get
+    val bcTree = points.context.broadcast(kdtree)
 
-    val bcTree = data.context.broadcast(kdtree)
-    val bcCenters = data.context.broadcast(centers)
+    val weightMap = points.map(p => (bcTree.value.nearest(p).tag, 1.0)).reduceByKey(_ + _).
+      collectAsMap()
 
-    val finalCenters = data.map { p =>
-      val nearest = bcTree.value.nearest(p)
-      (nearest.tag, 1)
-    }.reduceByKey(_ + _).
-      sortBy(_._2, ascending = false).
-      map(t => bcCenters.value(t._1)).
-      take(numClusters)
+    val weights = Array.tabulate[Double](centers.length)(weightMap.getOrElse(_, 0.0))
+    val finalCenters = localKMeansPlusPlus(centers.toArray, weights, numClusters)
 
     assert(finalCenters.length == numClusters,
       s"Got ${finalCenters.length} centers from InitParallel, expected ${numClusters}.")
     finalCenters
   }
+
+  private def localKMeansPlusPlus(points: Array[Vector[Double]], weights: Array[Double],
+      numClusters: Int): Array[Vector[Double]] = {
+    // Adapted from https://github.com/apache/spark/blob/master/mllib/src/main/scala/org/apache/spark/mllib/clustering/LocalKMeans.scala.
+
+    val rand = new Random(seed)
+    val dimensions = points(0).size
+    val centers = new Array[Vector[Double]](numClusters)
+
+    // Initialize centers with kmeans++ initialization procedure.
+    centers(0) = pickWeighted(rand, points, weights)
+    for (i <- 1 until numClusters) {
+      val kdtree = KDTree(centers.view.take(i).toList.zipWithIndex).get
+      val sum = points.view.zip(weights).map { case (p, w) =>
+        w * kdtree.nearest(p).sqdist
+      }.sum
+
+      val r = rand.nextDouble * sum
+      var cumulativeScore = 0.0
+      var j = 0
+      while (j < points.length && cumulativeScore < r) {
+        cumulativeScore += weights(j) * kdtree.nearest(points(j)).sqdist
+        j += 1
+      }
+
+      if (j == 0) {
+        centers(i) = points(0).toDenseVector
+      } else {
+        centers(i) = points(j - 1).toDenseVector
+      }
+    }
+
+    val oldClosest = Array.fill(points.length)(-1)
+    var iteration = 0
+    var moved = true
+    while (moved && iteration < maxIterations) {
+      moved = false
+      val counts = Array.fill(numClusters)(0.0)
+      val sums = Array.fill(numClusters)(DenseVector.zeros[Double](dimensions))
+
+      val kdtree = KDTree(centers.zipWithIndex).get
+      var i = 0
+      while (i < points.length) {
+        val p = points(i)
+        val index = kdtree.nearest(p).tag
+        sums(index) :+= (p * weights(i))
+        counts(index) += weights(i)
+
+        if (index != oldClosest(i)) {
+          moved = true
+          oldClosest(i) = index
+        }
+
+        i += 1
+      }
+
+      // Update centers.
+      var j = 0
+      while (j < numClusters) {
+        if (counts(j) == 0.0) {
+          centers(j) = points(rand.nextInt(points.length))
+        } else {
+          sums(j) :*= (1.0 / counts(j))
+          centers(j) = sums(j)
+        }
+        j += 1
+      }
+      iteration += 1
+    }
+
+    centers
+  }
+
+  private def pickWeighted(rand: Random, points: Array[Vector[Double]],
+      weights: Array[Double]): Vector[Double] = {
+    // Adapted from https://github.com/apache/spark/blob/master/mllib/src/main/scala/org/apache/spark/mllib/clustering/LocalKMeans.scala
+
+    val r = rand.nextDouble() * weights.sum
+    var i = 0
+    var curWeight = 0.0
+    while (i < points.length && curWeight < r) {
+      curWeight += weights(i)
+      i += 1
+    }
+
+    if (i == 0) points(0) else points(i - 1)
+  }
+
 }
 
+@SerialVersionUID(1L)
 class KMeansModel(centers: Array[Vector[Double]]) extends Serializable {
 
-  private val kdtree = KDTree(centers.zipWithIndex) match {
-    case Some(t) => t
-    case None => throw new IllegalArgumentException("Cannot construct KDTree with zero points")
-  }
+  private val kdtree = KDTree(centers.zipWithIndex).get
 
   def predict(m: Media): Int = {
     val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF

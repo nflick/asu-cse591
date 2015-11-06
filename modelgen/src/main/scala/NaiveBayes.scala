@@ -12,7 +12,7 @@ import org.apache.spark.SparkContext
 import org.apache.spark.rdd._
 import breeze.linalg._
 
-class NaiveBayes(lambda: Double) {
+class NaiveBayes(lambda: Double = 1.0) {
 
   def train(data: RDD[(Int, SparseVector[Double])]) = {
     // Adapted from https://github.com/apache/spark/blob/master/mllib/src/main/scala/org/apache/spark/mllib/classification/NaiveBayes.scala.
@@ -61,9 +61,20 @@ class NaiveBayes(lambda: Double) {
 
 }
 
+@SerialVersionUID(1L)
 class NaiveBayesModel(val labels: Array[Int], val pi: Array[Double],
     val theta: Array[SparseVector[Double]], val thetaLogDenom: Array[Double])
     extends Serializable {
+
+  def predictAll(features: SparseVector[Double]): Seq[(Int, Double)] = {
+    val logProb = multinomial(features)
+    val probs = posteriorProbabilities(logProb)
+    probs.zipWithIndex.sortBy(-_._1).map(t => (labels(t._2), t._1))
+  }
+
+  def predictMultiple(features: SparseVector[Double], count: Int): Seq[(Int, Double)] = {
+    predictAll(features).take(count)
+  }
 
   def predict(features: SparseVector[Double]): Int = {
     val logProb = multinomial(features)
@@ -84,7 +95,7 @@ class NaiveBayesModel(val labels: Array[Int], val pi: Array[Double],
   }
 
   private def product(features: SparseVector[Double], probs: SparseVector[Double],
-      denom: Double) = {
+      denom: Double): Double = {
 
     require(features.size == probs.size, "Vectors are different sizes")
     var product = 0.0
@@ -97,14 +108,14 @@ class NaiveBayesModel(val labels: Array[Int], val pi: Array[Double],
     product
   }
 
-  private def posteriorProbabilities(logProb: Array[Double]) = {
+  private def posteriorProbabilities(logProb: Array[Double]): Array[Double] = {
     val maxLog = logProb.max
     val scaledProbs = logProb.map(lp => math.exp(lp - maxLog))
     val probSum = scaledProbs.sum
     scaledProbs.map(_ / probSum)
   }
 
-  def save(path: String) = {
+  def save(path: String): Unit = {
     val objStream = new ObjectOutputStream(new FileOutputStream(path))
     try {
       objStream.writeObject(this)
@@ -116,7 +127,7 @@ class NaiveBayesModel(val labels: Array[Int], val pi: Array[Double],
 
 object NaiveBayesModel {
 
-  def load(path: String) = {
+  def load(path: String): NaiveBayesModel = {
     val objStream = new ObjectInputStream(new FileInputStream(path))
     try {
       val model = objStream.readObject() match {

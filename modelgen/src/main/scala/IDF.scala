@@ -27,6 +27,7 @@ object IDF {
 
 }
 
+@SerialVersionUID(1L)
 class IDFModel(terms: Map[String, (Int, Double)]) extends Serializable {
 
   def transform(features: Seq[String]): SparseVector[Double] = {

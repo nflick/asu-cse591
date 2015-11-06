@@ -19,6 +19,13 @@ import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
 import org.apache.spark.rdd._
 
+import akka.actor.{ActorSystem, Props}
+import akka.io.IO
+import spray.can.Http
+import akka.pattern.ask
+import akka.util.Timeout
+import scala.concurrent.duration._
+
 case class Arguments(
   appName: String = "Geolocation Model Builder",
   command: Symbol = null,
@@ -28,7 +35,8 @@ case class Arguments(
   sourcePath: String = null,
   modelPath: String = null,
   outputPath: String = null,
-  tags: String = null
+  tags: String = null,
+  port: Int = 8080
 )
 
 object ModelGen {
@@ -97,6 +105,31 @@ object ModelGen {
           text("The set of tags to predict as {tag1,tag2...}.")
       )
 
+    note("\n")
+    cmd("validate").
+      text("Perform k-fold cross validation on the data set.").
+      action((_, c) => c.copy(command = 'validate)).
+      children(
+        arg[String]("<source>").
+          action((x, c) => c.copy(sourcePath = x)).
+          text("Source of samples in CSV format.")
+      )
+
+    note("\n")
+    cmd("server").
+      text("Run a server to provide prediction services over HTTP.").
+      action((_, c) => c.copy(command = 'server)).
+      children(
+        opt[Int]('p', "port").
+          valueName("<port>").
+          action((x, c) => c.copy(port = x)).
+          text("Port to bind on."),
+
+        arg[String]("<model>").
+          action((x, c) => c.copy(modelPath = x)).
+          text("The tag prediction model.")
+      )
+
     checkConfig(c => if (c.command == null) failure("A command must be provided.") else success)
   }
 
@@ -104,13 +137,15 @@ object ModelGen {
     
     argParser.parse(args, Arguments()) match {
       case Some(arguments) => {
-        val conf = new SparkConf().setAppName(arguments.appName)
-        val sc = new SparkContext(conf)
+        lazy val conf = new SparkConf().setAppName(arguments.appName)
+        lazy val sc = new SparkContext(conf)
 
         arguments.command match {
           case 'visualize => visualize(sc, arguments)
           case 'train => train(sc, arguments)
           case 'predict => predict(sc, arguments)
+          case 'validate => validate(sc, arguments)
+          case 'server => server(arguments)
           case _ =>
         }
       }
@@ -119,7 +154,7 @@ object ModelGen {
     }
   }
 
-  def visualize(sc: SparkContext, args: Arguments) = {
+  def visualize(sc: SparkContext, args: Arguments): Unit = {
     val rand = new Random()
     def randomColor() = {
       val bytes = Array.ofDim[Byte](3)
@@ -139,7 +174,7 @@ object ModelGen {
       } { for (i <- 0 until model.numCenters) yield
         <Placemark>
         <styleUrl>{i.toString}</styleUrl>
-        <Point><coordinates>{s"${model.center(i).lat},${model.center(i).lon}"}</coordinates></Point>
+        <Point><coordinates>{s"${model.center(i).lon},${model.center(i).lat}"}</coordinates></Point>
         </Placemark>
     } </Document></kml>
     
@@ -147,21 +182,32 @@ object ModelGen {
   }
 
   def train(sc: SparkContext, args: Arguments): Unit = {
-    val samples = loadSamples(sc, args.sourcePath).cache()
-    val numClasses = args.numClasses match {
-      case Some(n) => n
-      case None => samples.count / 1000
-    }
-
-    val engine = PredictionModel.train(samples, numClasses.toInt, args.modelPath,
+    val samples = loadSamples(sc, args.sourcePath)
+    val engine = PredictionModel.train(samples, args.numClasses, args.modelPath,
       args.loadExisting, args.seed)
   }
 
-  def predict(sc: SparkContext, args: Arguments) = {
+  def predict(sc: SparkContext, args: Arguments): Unit = {
     val tags = TagList.parse(args.tags)
     val engine = PredictionModel.load(args.modelPath)
     val location = engine.predict(tags)
     println(s"PREDICTION: ${location.toString}")
+  }
+
+  def validate(sc: SparkContext, args: Arguments): Unit = {
+    val samples = loadSamples(sc, args.sourcePath)
+    PredictionModel.crossValidate(samples, 5, 3)
+  }
+
+  def server(args: Arguments): Unit = {
+    // Adapted from https://github.com/spray/spray-template/blob/on_spray-can_1.3/src/main/scala/com/example/Boot.scala
+    val model = PredictionModel.load(args.modelPath)
+
+    implicit val system = ActorSystem("on-spray-can")
+    implicit val timeout = Timeout(5.seconds)
+
+    val service = system.actorOf(Props(classOf[PredictionServiceActor], model), "prediction-service")
+    IO(Http) ? Http.Bind(service, interface = "localhost", port = args.port)
   }
 
   def loadSamples(sc: SparkContext, path: String): RDD[Media] = {
