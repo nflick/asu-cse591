@@ -4,9 +4,9 @@
  * Author: Nathan Flick
  */
 
-package com.github.nflick.modelgen.test
+package com.github.nflick.models.test
 
-import com.github.nflick.modelgen._
+import com.github.nflick.models._
 
 import scala.util.Random
 

@@ -1,33 +1,16 @@
 /**
- * IDF.scala
- * Inverse document frequency calculations.
+ * IDFModel.scala
+ * Inverse document frequency calculations model.
  * Author: Nathan Flick
  */
 
-package com.github.nflick.modelgen
+package com.github.nflick.models
 
 import java.io._
 
-import org.apache.spark.rdd._
-import breeze.linalg._
+import breeze.linalg.{SparseVector, VectorBuilder}
 
-object IDF {
-
-  def fit(docs: RDD[Seq[String]], minOccurences: Int = 5): IDFModel = {
-    val total = docs.count()
-    val terms = docs.flatMap(identity).
-      countByValue().
-      filter(_._2 > minOccurences).
-      toSeq.zipWithIndex.map({ case ((tag, count), index) =>
-        tag -> (index -> math.log(total.toDouble / count.toDouble))
-      }).toMap
-
-    new IDFModel(terms)
-  }
-
-}
-
-@SerialVersionUID(1L)
+@SerialVersionUID(2L)
 class IDFModel(terms: Map[String, (Int, Double)]) extends Serializable {
 
   def transform(features: Seq[String]): SparseVector[Double] = {
@@ -39,14 +22,6 @@ class IDFModel(terms: Map[String, (Int, Double)]) extends Serializable {
       }
     })
     builder.toSparseVector()
-  }
-
-  def transform(features: RDD[Seq[String]]): RDD[SparseVector[Double]] = {
-    val bcModel = features.context.broadcast(this)
-    features map { seq =>
-      val model = bcModel.value
-      model.transform(seq)
-    }
   }
 
   def save(path: String): Unit = {

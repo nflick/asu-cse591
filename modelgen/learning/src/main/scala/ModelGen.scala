@@ -4,7 +4,9 @@
  * Author: Nathan Flick
  */
 
-package com.github.nflick.modelgen
+package com.github.nflick.learning
+
+import com.github.nflick.models._
 
 import scala.util.parsing.combinator.RegexParsers
 import scala.language.postfixOps
@@ -12,36 +14,33 @@ import scala.util.Random
 
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.io._
+import java.io.File
 
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.SparkConf
 import org.apache.spark.rdd._
+import org.apache.spark.storage.StorageLevel
+import breeze.linalg.{Vector, DenseVector}
+import scopt.OptionParser
 
-import akka.actor.{ActorSystem, Props}
-import akka.io.IO
-import spray.can.Http
-import akka.pattern.ask
-import akka.util.Timeout
-import scala.concurrent.duration._
-
-case class Arguments(
+private[learning] case class Arguments(
   appName: String = "Geolocation Model Builder",
   command: Symbol = null,
-  numClasses: Option[Int] = None,
+  numPerClass: Int = 1000,
   loadExisting: Boolean = true,
   seed: Long = 42,
   sourcePath: String = null,
   modelPath: String = null,
   outputPath: String = null,
-  tags: String = null,
-  port: Int = 8080
+  folds: Int = 5
 )
 
 object ModelGen {
+
+  import ModelExtensions._
   
-  val argParser = new scopt.OptionParser[Arguments]("modelgen") {
+  val argParser = new OptionParser[Arguments]("modelgen") {
     head("ModelGen", "0.0.1")
     
     opt[String]('a', "appname").
@@ -68,10 +67,10 @@ object ModelGen {
       text("Train the prediction model.").
       action((_, c) => c.copy(command = 'train)).
       children(
-        opt[Int]('n', "num-classes").
+        opt[Int]('n', "num-per-class").
           valueName("<num>").
-          action((x, c) => c.copy(numClasses = Some(x))).
-          text("Number of classes (default 1 per 1000 samples)."),
+          action((x, c) => c.copy(numPerClass = x)).
+          text("Number of samples per class (default 1000)."),
 
         opt[Unit]('i', "ignore-existing").
           action((_, c) => c.copy(loadExisting = false)).
@@ -87,22 +86,8 @@ object ModelGen {
           text("Source of samples in CSV format."),
 
         arg[String]("<output>").
-          action((x, c) => c.copy(modelPath = x)).
+          action((x, c) => c.copy(outputPath = x)).
           text("Location to save the generated model.")
-      )
-
-    note("\n")
-    cmd("predict").
-      text("Predict the location of a set of tags.").
-      action((_, c) => c.copy(command = 'predict)).
-      children(
-        arg[String]("<model>").
-          action((x, c) => c.copy(modelPath = x)).
-          text("The tag prediction model."),
-
-        arg[String]("<tags>").
-          action((x, c) => c.copy(tags = x)).
-          text("The set of tags to predict as {tag1,tag2...}.")
       )
 
     note("\n")
@@ -110,24 +95,24 @@ object ModelGen {
       text("Perform k-fold cross validation on the data set.").
       action((_, c) => c.copy(command = 'validate)).
       children(
+        opt[Int]('n', "num-per-class").
+          valueName("<num>").
+          action((x, c) => c.copy(numPerClass = x)).
+          text("Number of samples per class (default 1000)."),
+
+        opt[Int]('s', "seed").
+          valueName("<value>").
+          action((x, c) => c.copy(seed = x)).
+          text("Seed for random number generator."),
+
+        opt[Int]('f', "folds").
+          valueName("<folds>").
+          action((x, c) => c.copy(folds = x)).
+          text("Number of folds (default 5)."),
+
         arg[String]("<source>").
           action((x, c) => c.copy(sourcePath = x)).
           text("Source of samples in CSV format.")
-      )
-
-    note("\n")
-    cmd("server").
-      text("Run a server to provide prediction services over HTTP.").
-      action((_, c) => c.copy(command = 'server)).
-      children(
-        opt[Int]('p', "port").
-          valueName("<port>").
-          action((x, c) => c.copy(port = x)).
-          text("Port to bind on."),
-
-        arg[String]("<model>").
-          action((x, c) => c.copy(modelPath = x)).
-          text("The tag prediction model.")
       )
 
     checkConfig(c => if (c.command == null) failure("A command must be provided.") else success)
@@ -137,15 +122,13 @@ object ModelGen {
     
     argParser.parse(args, Arguments()) match {
       case Some(arguments) => {
-        lazy val conf = new SparkConf().setAppName(arguments.appName)
-        lazy val sc = new SparkContext(conf)
+        val conf = new SparkConf().setAppName(arguments.appName)
+        val sc = new SparkContext(conf)
 
         arguments.command match {
           case 'visualize => visualize(sc, arguments)
           case 'train => train(sc, arguments)
-          case 'predict => predict(sc, arguments)
-          case 'validate => validate(sc, arguments)
-          case 'server => server(arguments)
+          case 'validate => crossValidate(sc, arguments)
           case _ =>
         }
       }
@@ -183,31 +166,85 @@ object ModelGen {
 
   def train(sc: SparkContext, args: Arguments): Unit = {
     val samples = loadSamples(sc, args.sourcePath)
-    val engine = PredictionModel.train(samples, args.numClasses, args.modelPath,
-      args.loadExisting, args.seed)
+    samples.persist(StorageLevel.MEMORY_AND_DISK_SER)
+
+    val numClasses = (samples.count / args.numPerClass).toInt
+
+    val clusters = if (args.loadExisting && new File(args.outputPath + ".kmeans").isFile) {
+      KMeansModel.load(args.outputPath + ".kmeans")
+    } else {
+      val points = samples.map({ m =>
+        val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF
+        DenseVector(ecef.x, ecef.y, ecef.z) : Vector[Double]
+      })
+      
+      val kmeans = new KMeans(seed = args.seed)
+      val clusters = kmeans.train(points, numClasses)
+      clusters.save(args.outputPath + ".kmeans")
+      clusters
+    }
+
+    val idf = if (args.loadExisting && new File(args.outputPath + ".idf").isFile) {
+      IDFModel.load(args.outputPath + ".idf")
+    } else {
+      val idf = IDF.fit(samples.map(_.tags))
+      idf.save(args.outputPath + ".idf")
+      idf
+    }
+
+    val classifier = if (args.loadExisting && new File(args.outputPath + ".nb").isFile) {
+      NaiveBayesModel.load(args.outputPath + ".nb")
+    } else {
+      val training = clusters.predict(samples).
+        zip(idf.transform(samples.map(_.tags : Seq[String])))
+
+      val nb = new NaiveBayes()
+      val classifier = nb.train(training)
+      classifier.save(args.outputPath + ".nb")
+      classifier
+    }
+
+    samples.unpersist(false)
   }
 
-  def predict(sc: SparkContext, args: Arguments): Unit = {
-    val tags = TagList.parse(args.tags)
-    val engine = PredictionModel.load(args.modelPath)
-    val location = engine.predict(tags)
-    println(s"PREDICTION: ${location.toString}")
-  }
-
-  def validate(sc: SparkContext, args: Arguments): Unit = {
+  def crossValidate(sc: SparkContext, args: Arguments): Unit = {
     val samples = loadSamples(sc, args.sourcePath)
-    PredictionModel.crossValidate(samples, 5, 3)
-  }
 
-  def server(args: Arguments): Unit = {
-    // Adapted from https://github.com/spray/spray-template/blob/on_spray-can_1.3/src/main/scala/com/example/Boot.scala
-    val model = PredictionModel.load(args.modelPath)
+    val seed = args.seed
+    val k = args.folds
+    val folds = samples.mapPartitionsWithIndex { case(index, data) =>
+      val rand = new Random(index << 16 ^ seed)
+      for (m <- data) yield (rand.nextInt(k), m)
+    }
 
-    implicit val system = ActorSystem("on-spray-can")
-    implicit val timeout = Timeout(5.seconds)
+    folds.persist(StorageLevel.MEMORY_AND_DISK_SER)
+    val count = folds.count
+    val numClasses = (count * (k - 1) / (k * args.numPerClass)).toInt
 
-    val service = system.actorOf(Props(classOf[PredictionServiceActor], model), "prediction-service")
-    IO(Http) ? Http.Bind(service, interface = "localhost", port = args.port)
+    var accuracy = 0.0
+    for (f <- 0 until k) {
+      val training = folds.filter(_._1 != f).map(_._2)
+      val testing = folds.filter(_._1 == f).map(_._2)
+
+      val points = samples.map({ m =>
+        val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF
+        DenseVector(ecef.x, ecef.y, ecef.z) : Vector[Double]
+      })
+      val clusters = new KMeans(seed = seed).train(points, numClasses)
+      val idf = IDF.fit(samples.map(_.tags))
+      val classified = clusters.predict(samples).
+        zip(idf.transform(samples.map(_.tags: Seq[String])))
+      val classifier = new NaiveBayes().train(classified)
+      val model = new PredictionModel(clusters, idf, classifier)
+
+      val acc = model.validate(testing, 1)
+      println(s"Fold $f: Accuracy = $acc")
+      accuracy += acc
+    }
+
+    folds.unpersist(false)
+    println(s"Overall accuracy = ${accuracy / k}")
+    accuracy / k
   }
 
   def loadSamples(sc: SparkContext, path: String): RDD[Media] = {

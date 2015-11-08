@@ -4,7 +4,9 @@
  * Author: Nathan Flick
  */
 
-package com.github.nflick.modelgen
+package com.github.nflick.learning
+
+import com.github.nflick.models._
 
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
@@ -14,71 +16,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.rdd._
 import org.apache.spark.storage.StorageLevel
 import breeze.linalg._
-
-trait VectorDist {
-
-  def squareDist(v1: Vector[Double], v2: Vector[Double]): Double = {
-    val s = v1.size
-    require(s == v2.size, "Vector sizes must be equal")
-
-    var i = 0
-    var dist = 0.0
-    while (i < s) {
-      val score = v1(i) - v2(i)
-      dist += score * score
-      i += 1
-    }
-
-    dist
-  }
-
-}
-
-object KDTree {
-
-  def apply[T](points: Seq[(Vector[Double], T)], depth: Int = 0): Option[KDNode[T]] = {
-    val dim = points.headOption match {
-      case None => 0
-      case Some((v, t)) => v.size
-    }
-
-    if (points.isEmpty || dim < 1) None
-    else {
-      val axis = depth % dim
-      val sorted = points.sortBy(_._1(axis))
-      val median = sorted(sorted.size / 2)._1(axis)
-      val (left, right) = sorted.partition(_._1(axis) < median)
-      Some(KDNode(right.head._1, right.head._2, apply(left, depth + 1), apply(right.tail, depth + 1), axis))
-    }
-  }
-
-  @SerialVersionUID(1L)
-  case class KDNode[T](value: Vector[Double], tag: T,
-      left: Option[KDNode[T]], right: Option[KDNode[T]], axis: Int) extends Serializable {
-
-    def nearest(to: Vector[Double]): Nearest[T] = {
-      val default = Nearest[T](value, tag, to)
-      val dist = to(axis) - value(axis)
-
-      lazy val bestL = left.map(_.nearest(to)).getOrElse(default)
-      lazy val bestR = right.map(_.nearest(to)).getOrElse(default)
-      val branch1 = if (dist < 0) bestL else bestR
-      val best = if (branch1.sqdist < default.sqdist) branch1 else default
-
-      if (dist * dist < best.sqdist) {
-        val branch2 = if (dist < 0) bestR else bestL
-        if (branch2.sqdist < best.sqdist) branch2 else best
-      } else best
-    }
-
-  }
-
-  @SerialVersionUID(1L)
-  case class Nearest[T](value: Vector[Double], tag: T, to: Vector[Double]) extends VectorDist {
-    val sqdist = squareDist(value, to)
-  }
-
-}
 
 class KMeans(maxIterations: Int = 50, initSteps: Int = 5,
   seed: Long = 42, epsilon: Double = 1e-4) extends VectorDist {
@@ -287,60 +224,6 @@ class KMeans(maxIterations: Int = 50, initSteps: Int = 5,
     }
 
     if (i == 0) points(0) else points(i - 1)
-  }
-
-}
-
-@SerialVersionUID(1L)
-class KMeansModel(centers: Array[Vector[Double]]) extends Serializable {
-
-  private val kdtree = KDTree(centers.zipWithIndex).get
-
-  def predict(m: Media): Int = {
-    val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF
-    val v = DenseVector(ecef.x, ecef.y, ecef.z)
-    predict(v)
-  }
-
-  def predict(v: Vector[Double]): Int = kdtree.nearest(v).tag
-
-  def predict(media: RDD[Media]): RDD[Int] = {
-    val bcModel = media.context.broadcast(this)
-    media map { m =>
-      bcModel.value.predict(m)
-    }
-  }
-
-  def center(label: Int): LLA = {
-    val v = centers(label)
-    ECEF(v(0), v(1), v(2)).toLLA
-  }
-
-  def numCenters: Int = centers.length
-
-  def save(path: String): Unit = {
-    val objStream = new ObjectOutputStream(new FileOutputStream(path))
-    try {
-      objStream.writeObject(this)
-    } finally {
-      objStream.close()
-    }
-  }
-
-}
-
-object KMeansModel {
-
-  def load(path: String): KMeansModel = {
-    val objStream = new ObjectInputStream(new FileInputStream(path))
-    try {
-      objStream.readObject() match {
-        case m: KMeansModel => m
-        case other => throw new ClassCastException(s"Expected KMeansModel, got ${other.getClass}.")
-      }
-    } finally {
-      objStream.close()
-    }
   }
 
 }

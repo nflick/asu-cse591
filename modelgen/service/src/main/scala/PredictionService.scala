@@ -5,7 +5,9 @@
  * Author: Nathan Flick
  */
 
-package com.github.nflick.modelgen
+package com.github.nflick.service
+
+import com.github.nflick.models._
 
 import akka.actor.Actor
 import spray.routing._

@@ -4,7 +4,7 @@
  * Author: Nathan Flick
  */
 
-package com.github.nflick.modelgen
+package com.github.nflick.models
 
 case class LLA(lat: Double, lon: Double, alt: Double) {
   // Latitude and longitude in degrees, altitude in meters.

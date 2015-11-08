@@ -1,10 +1,10 @@
 /**
- * ModelGen.scala
+ * Media.scala
  * Representations for Instagram media with geolocations.
  * Author: Nathan Flick
  */
 
-package com.github.nflick.modelgen
+package com.github.nflick.models
 
 import java.time.LocalDateTime
 
