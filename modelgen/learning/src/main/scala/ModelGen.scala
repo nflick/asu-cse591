@@ -12,8 +12,8 @@ import scala.util.parsing.combinator.RegexParsers
 import scala.language.postfixOps
 import scala.util.Random
 
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
+import java.util.Date
+import java.text.{ParsePosition, SimpleDateFormat}
 import java.io.File
 
 import org.apache.spark.SparkContext
@@ -251,12 +251,14 @@ object ModelGen {
     sc.textFile(path).
       repartition(20).
       mapPartitions({ rows =>
-        val format = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        val format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+        val pos = new ParsePosition(0)
         for {
           row <- rows.map(r => CSVLine.parse(r.trim))
           if row.length == 8
         } yield {
-          Media(row(0).toLong, row(1).toLong, LocalDateTime.parse(row(2), format), TagList.parse(row(3)),
+          pos.setIndex(0)
+          Media(row(0).toLong, row(1).toLong, format.parse(row(2), pos), TagList.parse(row(3)),
             row(4).toLong, row(5), row(6).toDouble, row(7).toDouble)
         }
       })

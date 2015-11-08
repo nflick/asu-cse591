@@ -36,7 +36,7 @@ trait PredictionService extends HttpService {
     path("predict" / Segment ~ PathEnd) { tags =>
       get  {
         parameters("count".as[Int] ?) { count =>
-          val terms = tags.split('+')
+          val terms = tags.split('+').map(_.toLowerCase)
           val result = count match {
             case Some(c) => model.predictMultiple(terms, c)
             case None => model.predictHeuristic(terms)

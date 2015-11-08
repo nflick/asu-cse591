@@ -6,12 +6,12 @@
 
 package com.github.nflick.models
 
-import java.time.LocalDateTime
+import java.util.Date
 
 case class Media(
   id: Long,
   userId: Long,
-  date: LocalDateTime,
+  date: Date,
   tags: List[String],
   locationId: Long,
   locationName: String,
