@@ -18,19 +18,26 @@ import scopt.OptionParser
 
 private[service] case class Arguments(
   modelPath: String = null,
-  port: Int = 0
+  interface: String = "localhost",
+  port: Int = 8080
 )
 
-object ModelGen {
+object Boot {
 
-  val argParser = new OptionParser[Arguments]("modelgen") {
-    head("ModelGen", "0.0.1")
+  val argParser = new OptionParser[Arguments]("service") {
+    head("Prediction Service", "0.0.1")
     
-    arg[String]("<model>").
+    arg[String]("model").
       action((x, c) => c.copy(modelPath = x)).
       text("The tag prediction model.")
+
+    opt[String]('i', "interface").
+      valueName("<interface>").
+      action((x, c) => c.copy(interface = x)).
+      text("Interface to bind to.")
     
-    arg[Int]("<port>").
+    opt[Int]('p', "port").
+      valueName("<port>").
       action((x, c) => c.copy(port = x)).
       text("Port to bind to.")
   }
@@ -44,7 +51,7 @@ object ModelGen {
         implicit val system = ActorSystem("on-spray-can")
         implicit val timeout = Timeout(5.seconds)
         val service = system.actorOf(Props(classOf[PredictionServiceActor], model), "prediction-service")
-        IO(Http) ? Http.Bind(service, interface = "localhost", port = arguments.port)
+        IO(Http) ? Http.Bind(service, interface = arguments.interface, port = arguments.port)
       }
 
       case None =>
