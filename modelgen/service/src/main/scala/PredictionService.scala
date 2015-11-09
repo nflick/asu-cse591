@@ -23,12 +23,13 @@ class PredictionServiceActor(val model: PredictionModel) extends Actor with Pred
 }
 
 object PredictionJsonProtocol extends DefaultJsonProtocol {
-  implicit val predictionFormat = jsonFormat2(Prediction)
+  implicit val predictionFormat = jsonFormat3(Prediction)
 }
 
 trait PredictionService extends HttpService {
 
 	val model: PredictionModel
+  val splitter = "[+,]".r
 
   val predict = {
     import SprayJsonSupport._
@@ -36,7 +37,7 @@ trait PredictionService extends HttpService {
     path("predict" / Segment ~ PathEnd) { tags =>
       get  {
         parameters("count".as[Int] ?) { count =>
-          val terms = tags.split('+').map(_.toLowerCase)
+          val terms = splitter.split(tags).map(_.toLowerCase)
           val result = count match {
             case Some(c) => model.predictMultiple(terms, c)
             case None => model.predictHeuristic(terms)

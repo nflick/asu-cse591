@@ -80,6 +80,9 @@ class KMeansModel(centers: Array[Vector[Double]]) extends Serializable {
 
   private val kdtree = KDTree(centers.zipWithIndex).get
 
+  @transient
+  private var polygons = Voronoi.compute(centers)
+
   def predict(m: Media): Int = {
     val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF
     val v = DenseVector(ecef.x, ecef.y, ecef.z)
@@ -88,12 +91,14 @@ class KMeansModel(centers: Array[Vector[Double]]) extends Serializable {
 
   def predict(v: Vector[Double]): Int = kdtree.nearest(v).tag
 
+  def numClasses: Int = centers.length
+
   def center(label: Int): LLA = {
     val v = centers(label)
     ECEF(v(0), v(1), v(2)).toLLA
   }
 
-  def numCenters: Int = centers.length
+  def polygon(label: Int): Array[LLA] = polygons(label)
 
   def save(path: String): Unit = {
     val objStream = new ObjectOutputStream(new FileOutputStream(path))
@@ -102,6 +107,12 @@ class KMeansModel(centers: Array[Vector[Double]]) extends Serializable {
     } finally {
       objStream.close()
     }
+  }
+
+  @throws(classOf[java.io.IOException])
+  private def readObject(in: ObjectInputStream): Unit = {
+    in.defaultReadObject()
+    polygons = Voronoi.compute(centers)
   }
 
 }

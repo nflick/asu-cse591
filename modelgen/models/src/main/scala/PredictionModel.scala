@@ -6,7 +6,8 @@
 
 package com.github.nflick.models
 
-case class Prediction(center: (Double, Double), probability: Double)
+case class Prediction(center: (Double, Double), polygon: Array[(Double, Double)],
+    probability: Double)
 
 class PredictionModel(clusters: KMeansModel, idf: IDFModel,
     classifier: NaiveBayesModel) extends Serializable {
@@ -15,14 +16,14 @@ class PredictionModel(clusters: KMeansModel, idf: IDFModel,
     val features = idf.transform(tags)
     val (class_, prob) = classifier.predictMultiple(features, 1).head
     val location = clusters.center(class_)
-    Prediction((location.lat, location.lon), prob)
+    Prediction((location.lat, location.lon), transformPoly(clusters.polygon(class_)), prob)
   }
 
   def predictMultiple(tags: Seq[String], count: Int): Seq[Prediction] = {
     val features = idf.transform(tags)
     classifier.predictMultiple(features, count).map({ case (class_, prob) =>
       val location = clusters.center(class_)
-      Prediction((location.lat, location.lon), prob)
+      Prediction((location.lat, location.lon), transformPoly(clusters.polygon(class_)), prob)
     })
   }
 
@@ -34,7 +35,7 @@ class PredictionModel(clusters: KMeansModel, idf: IDFModel,
       takeWhile(_._3 < 0.75).
       map({ case (class_, prob, cumul) =>
         val location = clusters.center(class_)
-        Prediction((location.lat, location.lon), prob)
+        Prediction((location.lat, location.lon), transformPoly(clusters.polygon(class_)), prob)
       })
   }
 
@@ -44,6 +45,10 @@ class PredictionModel(clusters: KMeansModel, idf: IDFModel,
     val truth = clusters.predict(m)
     Array.tabulate[Int](levels.length)(i =>
       if (classes.take(levels(i)).exists(_._1 == truth)) 1 else 0)
+  }
+
+  private def transformPoly(poly: Array[LLA]): Array[(Double, Double)] = {
+    poly.map(l => (l.lat, l.lon))
   }
 
 }

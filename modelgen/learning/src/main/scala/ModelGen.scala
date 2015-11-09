@@ -142,22 +142,30 @@ object ModelGen {
     def randomColor() = {
       val bytes = Array.ofDim[Byte](3)
       rand.nextBytes(bytes)
-      f"ff${bytes(0)}%02x${bytes(1)}%02x${bytes(2)}%02x"
+      f"80${bytes(0)}%02x${bytes(1)}%02x${bytes(2)}%02x"
     }
 
     val model = KMeansModel.load(args.modelPath + ".kmeans")
+    val coords = Array.tabulate[String](model.numClasses)({ i =>
+      val polygon = model.polygon(i)
+      val c = for (p <- polygon) yield s"${p.lon},${p.lat},0.0\n"
+      c.mkString("") + c(0)
+    })
 
     val kml =
     <kml><Document>
-      { for (i <- 0 until model.numCenters) yield
-        <Style id={i.toString}><IconStyle>
-        <color>{randomColor()}</color>
-        <Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>
-        </IconStyle></Style>
-      } { for (i <- 0 until model.numCenters) yield
+      { for (i <- 0 until model.numClasses) yield
         <Placemark>
-        <styleUrl>{i.toString}</styleUrl>
-        <Point><coordinates>{s"${model.center(i).lon},${model.center(i).lat}"}</coordinates></Point>
+        <Style>
+        <LineStyle><width>2</width></LineStyle>
+        </Style>
+        <Polygon>
+        <outerBoundaryIs><LinearRing>
+        <coordinates>
+          { coords(i) }
+        </coordinates>
+        </LinearRing></outerBoundaryIs>
+        </Polygon>
         </Placemark>
     } </Document></kml>
     

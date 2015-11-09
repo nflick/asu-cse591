@@ -29,7 +29,8 @@ lazy val learning = project.in(file("learning")).
     libraryDependencies ++= Seq(
       "org.apache.spark"  %% "spark-core"     % "1.5.1" % "provided",
       "org.apache.spark"  %% "spark-mllib"    % "1.5.1" % "provided",
-      "com.github.scopt"  %% "scopt"          % "3.3.0"
+      "com.github.scopt"  %% "scopt"          % "3.3.0",
+      "com.github.quickhull3d" % "quickhull3d" % "1.0.0"
     )
   )
 
