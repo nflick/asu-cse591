@@ -207,7 +207,7 @@ object ModelGen {
     samples.unpersist(false)
   }
 
-  def crossValidate(sc: SparkContext, args: Arguments): Unit = {
+  def crossValidate(sc: SparkContext, args: Arguments): Array[Double] = {
     val samples = loadSamples(sc, args.sourcePath)
 
     val seed = args.seed
@@ -221,10 +221,13 @@ object ModelGen {
     val count = folds.count
     val numClasses = (count * (k - 1) / (k * args.numPerClass)).toInt
 
-    var accuracy = 0.0
+    val levels = Array(1, 4, 16)
+    val accuracy = Array.fill(levels.length)(0.0)
+
     for (f <- 0 until k) {
       val training = folds.filter(_._1 != f).map(_._2)
       val testing = folds.filter(_._1 == f).map(_._2)
+      training.persist(StorageLevel.MEMORY_AND_DISK_SER)
 
       val points = samples.map({ m =>
         val ecef = LLA(m.latitude, m.longitude, 0.0).toECEF
@@ -237,14 +240,21 @@ object ModelGen {
       val classifier = new NaiveBayes().train(classified)
       val model = new PredictionModel(clusters, idf, classifier)
 
-      val acc = model.validate(testing, 1)
-      println(s"Fold $f: Accuracy = $acc")
-      accuracy += acc
+      val acc = model.validate(testing, levels)
+      for (i <- 0 until levels.length) {
+        println(s"Fold $f: Top ${levels(i)}: Accuracy = ${acc(i)}")
+        accuracy(i) += acc(i)
+      }
+
+      training.unpersist(false)
     }
 
     folds.unpersist(false)
-    println(s"Overall accuracy = ${accuracy / k}")
-    accuracy / k
+    for (i <- 0 until levels.length) {
+      accuracy(i) /= k
+      println(s"Overall: Top ${levels(i)}: Accuracy = ${accuracy(i)}")
+    }
+    accuracy
   }
 
   def loadSamples(sc: SparkContext, path: String): RDD[Media] = {

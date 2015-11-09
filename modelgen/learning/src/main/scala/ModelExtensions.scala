@@ -34,10 +34,14 @@ object ModelExtensions {
 
   implicit class PredictionModelExtensions(val self: PredictionModel) extends AnyVal {
 
-    def validate(media: RDD[Media], top: Int): Double = {
+    def validate(media: RDD[Media], levels: Array[Int]): Array[Double] = {
+      val count = media.count
       val bcModel = media.context.broadcast(self)
-      val correct = media.filter(m => bcModel.value.validate(m, top)).count
-      correct.toDouble / media.count.toDouble
+      media.map(bcModel.value.validate(_, levels)).
+        fold(Array.fill(levels.length)(0))({ (a, b) =>
+          for (i <- 0 until a.length) a(i) += b(i)
+          a
+        }).map(_.toDouble / count)
     }
 
   }

@@ -38,11 +38,12 @@ class PredictionModel(clusters: KMeansModel, idf: IDFModel,
       })
   }
 
-  def validate(m: Media, top: Int): Boolean = {
+  def validate(m: Media, levels: Array[Int]): Array[Int] = {
     val features = idf.transform(m.tags)
-    val classes = classifier.predictMultiple(features, top)
+    val classes = classifier.predictAll(features)
     val truth = clusters.predict(m)
-    classes.exists(_._1 == truth)
+    Array.tabulate[Int](levels.length)(i =>
+      if (classes.take(levels(i)).exists(_._1 == truth)) 1 else 0)
   }
 
 }
