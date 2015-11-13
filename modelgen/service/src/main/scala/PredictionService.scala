@@ -28,7 +28,7 @@ object PredictionJsonProtocol extends DefaultJsonProtocol {
 
 trait PredictionService extends HttpService {
 
-	val model: PredictionModel
+  val model: PredictionModel
   val splitter = "[+,]".r
 
   val predict = {

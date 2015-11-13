@@ -68,7 +68,7 @@
           fillOpacity: 0.35
         });
 
-        mapPoly.setMap(map);
+        mapPoly.setMap(window.map);
         ctrl.polygons.push(mapPoly);
 
         var paths = mapPoly.getPaths();
@@ -86,14 +86,14 @@
         var marker = new google.maps.Marker({
           icon: icon,
           position: { lat: prediction.center[0], lng: prediction.center[1] },
-          map: map
+          map: window.map
         });
         ctrl.markers.push(marker);
 
         bounds.extend(marker.getPosition());
       }
 
-      map.fitBounds(bounds);
+      window.map.fitBounds(bounds);
     };
 
     this.addHistory = function(tags, predictions) {
@@ -121,7 +121,7 @@
 })();
 
 function initMap() {
-  map = new google.maps.Map(document.getElementById('map'), {
+  window.map = new google.maps.Map(document.getElementById('map'), {
     center: { lat: 20.0, lng: -30.0 },
     zoom: 3
   });

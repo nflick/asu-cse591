@@ -121,6 +121,7 @@ class KMeans(maxIterations: Int = 50, initSteps: Int = 5,
       step += 1
     }
 
+    println("KMeans|| centers: " + centers.size.toString)
     centers ++= newCenters
     newCenters.clear()
     costs.unpersist(false)
